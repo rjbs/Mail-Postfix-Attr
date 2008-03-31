@@ -1,181 +1,172 @@
+# XXX note: this is NOT the same as Mail::Postfix::Attr on CPAN.  it has a
+# similar interface, but extra functions for greater flexibility:
+# (raw_)(read|write).  I'm sorry it's not on CPAN.  -- hdp, 2007-08-22
+
 package Mail::Postfix::Attr;
 
 use strict;
 use warnings;
 
-use Carp ;
+use Carp;
 
 our $VERSION = '0.03';
 
 my %codecs = (
-
-	'0'	=> [ \&encode_0, \&decode_0 ],
-	'64'	=> [ \&encode_64, \&decode_64 ],
-	'plain'	=> [ \&encode_plain, \&decode_plain ],
-) ;
+	      '0'	=> [ \&encode_0,     \&decode_0,     q(\0/) ],
+	      '64'	=> [ \&encode_64,    \&decode_64,    q(\n)  ],
+	      'plain'	=> [ \&encode_plain, \&decode_plain, q(\n)  ],
+	     );
 
 sub new {
+	my ($class, %args) = @_;
+	my $self = bless {}, $class;
+	my $codec_ref = $codecs{ $args{codec} } || $codecs{plain};
 
-	my ( $class, %args ) = @_ ;
+	$self->{sock_path} = $args{path};
+	$self->{inet} = $args{inet};
+	$self->{fh} = $args{fh};
 
-	my $self = bless {}, $class ;
+	@{$self}{qw(encode decode delimiter)} = @{$codec_ref};
 
-	my $codec_ref = $codecs{ $args{'codec'} } || $codecs{ 'plain' } ;
+	return $self;
+}
 
-	$self->{'sock_path'} = $args{'path'} ;
-	$self->{'inet'} = $args{'inet'} ;
-
-	( $self->{'encode'}, $self->{'decode'} ) = @{$codec_ref} ;
-
-	return $self ;
+sub fh {
+  my $self = shift;
+  my $fh;
+  unless ($self->{fh}) {
+    if ( $self->{sock_path} ) {
+      require IO::Socket::UNIX;
+      $fh = IO::Socket::UNIX->new( $self->{sock_path} );
+      $fh or croak "Mail::Postfix::Attr can't connect to '$self->{sock_path}' $!\n";
+      $self->{fh} = $fh;
+    } elsif ( $self->{inet} ) {
+      require IO::Socket::INET;
+      $fh = IO::Socket::INET->new( $self->{inet} );
+      $fh or croak "Mail::Postfix::Attr can't connect to '$self->{inet}' $!\n";
+      $self->{fh} = $fh;
+    } elsif ($self->{fh}) {
+      $fh = $self->{fh}
+    } else {
+      croak "must have 'path' or 'inet' or 'fh' set to use send";
+    }
+  }
+  croak "can't find filehandle for $self" unless $self->{fh};
+  return $self->{fh};
 }
 
 sub send {
+  my ($self) = shift;
+  $self->write(@_);
+  return $self->read;
+}
 
-	my ( $self ) = shift ;
+sub write {
+  my ($self) = shift;
+  $self->raw_write($self->encode(@_));
+}
 
-	my $handle ;
+sub raw_write {
+  my $self = shift;
+  my $fh = $self->fh;
+  my $count = syswrite($fh, shift);
+  croak "syswrite: error: $!" unless $count;
+}
 
-	if ( $self->{'sock_path'} ) {
+sub read {
+  my ($self) = shift;
+  return map @$_, $self->decode($self->raw_read);
+}
 
-		require IO::Socket::UNIX ;
-
-		$handle = IO::Socket::UNIX->new( $self->{'sock_path'} ) ;
-
-		$handle or croak
-"Mail::Postfix::Attr can't connect to '$self->{'sock_path'}' $!\n" ;
-	}
-	elsif ( $self->{'inet'} ) {
-
-		require IO::Socket::INET ;
-
-		$handle = IO::Socket::INET->new( $self->{'inet'} ) ;
-
-		$handle or croak
-"Mail::Postfix::Attr can't connect to '$self->{'inet'}' $!\n" ;
-
-	}
-	else {
-		croak "must have 'path' or 'inet' set to use send" ;
-	}
-
-	my $attr_text = $self->encode( @_ ) ;
-
-	my $cnt = syswrite( $handle, $attr_text ) ;
-
-#print "ERR $!\n" unless defined $cnt ;
-#print "sent $cnt [$attr_text]\n" ;
-
-	sysread( $handle, my $attr_buf, 64000 ) ;
-
-#print "SEND READ [$attr_buf]\n" ;
-
-	my @result = $self->decode( $attr_buf );
-
-	return map { @$_ } @result;
+sub raw_read {
+  my $self = shift;
+  my $fh = $self->fh;
+  my $buf;
+  my $r = sysread($fh, $buf, 64000);
+  die "sysread error: $!" unless defined $r;
+  return $buf;
 }
 
 sub encode {
-	my ( $self ) = @_ ;
-	goto $self->{'encode'} ;
+  my ($self) = @_;
+  goto $self->{encode};
 }
 
 sub decode {
-	my ( $self ) = @_ ;
-	goto $self->{'decode'} ;
+  my ($self) = @_;
+  goto $self->{decode};
+}
+
+sub delimiter {
+  my ($self) = @_;
+  return $self->{delimiter};
 }
 
 sub encode_0 {
-
-	my( $self ) = shift ;
-
-	my $attr_text ;
-
-	while( my( $attr, $val ) = splice( @_, 0, 2 ) ) {
-
-		$attr_text .= "$attr\0$val\0" ;
-	}
-
-	return "$attr_text\0" ;
+  my ($self) = shift;
+  my $attr_text;
+  while (my ($attr, $val) = splice(@_, 0, 2)) {
+    $val = "" unless defined $val;
+    $attr_text .= "$attr\0$val\0";
+  }
+  return "$attr_text\0";
 }
 
 sub encode_64 {
-
-	my( $self ) = shift ;
-
-	my $attr_text ;
-
-	require MIME::Base64 ;
-
-	while( my( $attr, $val ) = splice( @_, 0, 2 ) ) {
-
-		$attr_text .= MIME::Base64::encode_base64( $attr, '' ) . ':' .
-			      MIME::Base64::encode_base64( $val, '' ) . "\n" ;
-
-	}
-
-	return "$attr_text\n" ;
+  my ($self) = shift;
+  my $attr_text;
+  require MIME::Base64;
+  while (my ($attr, $val) = splice(@_, 0, 2)) {
+    $val = "" unless defined $val;
+    $attr_text .= MIME::Base64::encode_base64( $attr, '' ) . ':' .
+      MIME::Base64::encode_base64( $val, '' ) . "\n";
+  }
+  return "$attr_text\n";
 }
 
 sub encode_plain {
-
-	my( $self ) = shift ;
-
-	my $attr_text ;
-
-	while( my( $attr, $val ) = splice( @_, 0, 2 ) ) {
-
-		$attr_text .= "$attr=$val\n" ;
-	}
-
-	return "$attr_text\n" ;
+  my ($self) = shift;
+  my $attr_text;
+  while (my ($attr, $val) = splice(@_, 0, 2)) {
+    $val = "" unless defined $val;
+    $attr_text .= "$attr=$val\n";
+  }
+  return "$attr_text\n";
 }
 
-
-
 sub decode_0 {
-
-	my( $self, $text ) = @_ ;
-
-	my @attrs ;
-
-	foreach my $section ( split /(?<=\0\0)/, $text ) {
-
-		push( @attrs, [ split /\0/, $section ] ) ;
-	}
-
-	return @attrs ;
+  my ($self, $text) = @_;
+  my @attrs;
+  # the lookahead avoids a situation where (x => "") is
+  # encoded as "x\0\0\0" but then decoded into [ "x" ], []
+  foreach my $section ( split /(?<=\0\0)(?!\0)/, $text ) {
+    # count is here to make sure that trailing attributes with empty values are correctly given
+    # previously (a => 1, b => 2, c => "") would come out as [ "a", 1, "b", 2, "c" ]
+    my $count = ($section =~ tr/\0//) - 1;
+    $section = substr($section, 0, length($section) - 2);
+    push( @attrs, [ split /\0/, $section, $count ] );
+  }
+  return @attrs;
 }
 
 sub decode_64 {
-
-	my( $self, $text ) = @_ ;
-
-	require MIME::Base64 ;
-
-	my @attrs ;
-
-	foreach my $section ( split /(?<=\n\n)/, $text ) {
-
-		push( @attrs, [ map MIME::Base64::decode_base64 $_,
-					$section =~ /^([^:]+):(.+)$/mg ] ) ;
-	}
-
-	return @attrs ;
+  my ($self, $text) = @_;
+  require MIME::Base64;
+  my @attrs;
+  foreach my $section (split /(?<=\n\n)/, $text) {
+    push (@attrs, [ map MIME::Base64::decode_base64 $_,
+		    $section =~ /^([^:]+):(.+)$/mg ]);
+  }
+  return @attrs;
 }
 
 sub decode_plain {
-
-	my( $self, $text ) = @_ ;
-
-	my @attrs ;
-
-	foreach my $section ( split /(?<=\n\n)/, $text ) {
-
-		push( @attrs, [ split /[\n=]/, $section ] ) ;
-	}
-
-	return @attrs ;
+  my ($self, $text) = @_;
+  my @attrs;
+  foreach my $section (split /(?<=\n\n)/, $text) {
+    push (@attrs, [ map { split /=/, $_, 2 } split /\n/, $section ]);
+  }
+  return @attrs;
 }
 
 1;
@@ -190,17 +181,17 @@ Mail::Postfix::Attr - Encode and decode Postfix attributes
   use Mail::Postfix::Attr;
 
   my $pf_attr = Mail::Postfix::Attr->new( 'codec' => '0',
-					  'path' => '/tmp/postfix_sock' ) ;
+					  'path' => '/tmp/postfix_sock' );
 
 
   my $pf_attr = Mail::Postfix::Attr->new( 'codec' => 'plain',
-					  'inet' => 'localhost:9999' ) ;
+					  'inet' => 'localhost:9999' );
 
-  my @result_attrs = $pf_attr->send( 'foo' => 4, 'bar' => 'blah' ) ;
+  my @result_attrs = $pf_attr->send( 'foo' => 4, 'bar' => 'blah' );
 
-  my $attr_text = $pf_attr->encode( 'foo' => 4, 'bar' => 'blah' ) ;
+  my $attr_text = $pf_attr->encode( 'foo' => 4, 'bar' => 'blah' );
 
-  my @attrs = $pf_attr->decode( $attr_text ) ;
+  my @attrs = $pf_attr->decode( $attr_text );
 
 =head1 DESCRIPTION
 
@@ -236,7 +227,7 @@ If you run 'make test' (after building postfix) in this directory it will build 
 =head2 new() method 
 
 	my $pf_attr = Mail::Postfix::Attr->new( 'codec' => '0',
-					  'path' => '/tmp/postfix_sock' ) ;
+					  'path' => '/tmp/postfix_sock' );
 
 The new method takes a list of key/value arguments.
 
@@ -268,7 +259,7 @@ writes that data to the socket. It then reads from the socket to EOF
 and decodes that data with the codec and returns that list of
 attribute key/value pairs to the caller.
 
-  my @result_attrs = $pf_attr->send( 'foo' => 4, 'bar' => 'blah' ) ;
+  my @result_attrs = $pf_attr->send( 'foo' => 4, 'bar' => 'blah' );
 
 =head2 encode() method 
 
@@ -278,15 +269,15 @@ encoded text of the attribute/value pairs. Each call will create a
 single attribute section which is terminated by an extra separator
 char.
 
-  my $attr_text = $pf_attr->encode( 'foo' => 4, 'bar' => 'blah' ) ;
+  my $attr_text = $pf_attr->encode( 'foo' => 4, 'bar' => 'blah' );
 
 You can also call each encoder directly as a class method:
 
-  my $attr_text = Mail::Postfix::Attr->encode_0( 'foo' => 4, 'bar' => 'blah' ) ;
+  my $attr_text = Mail::Postfix::Attr->encode_0( 'foo' => 4, 'bar' => 'blah' );
   my $attr_text =
-	Mail::Postfix::Attr->encode_64( 'foo' => 4, 'bar' => 'blah' ) ;
+	Mail::Postfix::Attr->encode_64( 'foo' => 4, 'bar' => 'blah' );
   my $attr_text =
-	Mail::Postfix::Attr->encode_plain( 'foo' => 4, 'bar' => 'blah' ) ;
+	Mail::Postfix::Attr->encode_plain( 'foo' => 4, 'bar' => 'blah' );
 
 =head2 decode() method 
 
@@ -296,13 +287,13 @@ into a list of attribute/value pairs. It returns a list of array
 references, each of which has the attribute/value pairs of one
 attribute section.
 
-  my @attrs = $pf_attr->decode( $attr_text ) ;
+  my @attrs = $pf_attr->decode( $attr_text );
 
 You can also call each decoder directly as a class method:
 
-  my @attrs = Mail::Postfix::Attr->decode_0( $attr_text ) ;
-  my @attrs = Mail::Postfix::Attr->decode_64( $attr_text ) ;
-  my @attrs = Mail::Postfix::Attr->decode_plain( $attr_text ) ;
+  my @attrs = Mail::Postfix::Attr->decode_0( $attr_text );
+  my @attrs = Mail::Postfix::Attr->decode_64( $attr_text );
+  my @attrs = Mail::Postfix::Attr->decode_plain( $attr_text );
 
 =head1 EXAMPLES
 
