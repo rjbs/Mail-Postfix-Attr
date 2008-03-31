@@ -9,7 +9,7 @@ use warnings;
 
 use Carp;
 
-our $VERSION = '0.03';
+our $VERSION = '0.03_pobox';
 
 my %codecs = (
 	      '0'	=> [ \&encode_0,     \&decode_0,     q(\0/) ],
