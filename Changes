@@ -1,0 +1,15 @@
+Revision history for Perl extension Mail::Postfix::Attr.
+
+0.01  Sun Aug  3 01:10:50 2003
+	- original version; created by h2xs 1.21 with options
+		-X -n Mail::Postfix::Attr
+
+0.02  Wed Dec  3 00:45:07 EST 2003
+        - fixed problem with plain format and test
+
+0.03  Fri Dec 19 01:12:51 EST 2003
+        - added support for INET sockets
+
+
+
+

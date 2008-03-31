@@ -1,0 +1,22 @@
+Mail/Postfix/Attr version 0.01
+==============================
+
+Mail::Postfix::Attr - Encode and decode Postfix attributes
+
+INSTALLATION
+
+To install this module type the following:
+
+   perl Makefile.PL
+   make
+   make test
+   make install
+
+COPYRIGHT AND LICENCE
+
+Put the correct copyright and licence information here.
+
+Copyright (C) 2003 2000 Uri Guttman. All rights reserved.
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself.
