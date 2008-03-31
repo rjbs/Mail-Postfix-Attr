@@ -1,4 +1,4 @@
-Attr.pm
+lib/Mail/Postfix/Attr.pm
 Changes
 Makefile.PL
 MANIFEST
