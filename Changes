@@ -1,6 +1,8 @@
 Revision history for Perl extension Mail::Postfix::Attr.
 
 {{$NEXT}}
+
+0.04      2013-01-02 11:31:01 America/New_York
           longstanding patches applied; still sort of a mess
 
 0.03      Fri Dec 19 01:12:51 EST 2003
